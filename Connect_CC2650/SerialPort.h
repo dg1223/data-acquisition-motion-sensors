@@ -60,6 +60,7 @@ public:
 	void ClosePort();
 	BOOL ReadByte(unsigned long long &resp, DWORD bytesToRead);
 	int ReadByte2(unsigned long long &resp, DWORD bytesToRead);
+	BOOL ReadByte3(unsigned short &resp, DWORD bytesToRead);
 	BOOL WriteByte(unsigned short bybyte, DWORD bytesToWrite);
 	HANDLE OpenPort(CString portname);
 	BOOL SetCommunicationTimeouts(DWORD ReadIntervalTimeout,DWORD ReadTotalTimeoutMultiplier,DWORD ReadTotalTimeoutConstant,DWORD WriteTotalTimeoutMultiplier,DWORD WriteTotalTimeoutConstant);

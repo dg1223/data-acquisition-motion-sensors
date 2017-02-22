@@ -44,13 +44,13 @@ Future work:
 //#define _AFXDLL
 
 #include "afxcoll.h"
-#include "stdafx.h"
 #include "SerialPort.h"
 #include <iostream>
-#include "string.h"
+//#include "string.h"
 #include <string>
 #include <strsafe.h>
 #include <windows.h>
+#include <sstream>
 
 using namespace std;
 
@@ -88,8 +88,27 @@ void ErrorExit(LPTSTR lpszFunction)
 	ExitProcess(dw);
 }
 
-float convertToRealData(unsigned short hexValue);
-//float convertToRealData2(unsigned short hexValue);
+string convertBufferToString(unsigned long long src) {
+	string tempBuffer;
+	std::stringstream stream;
+	stream << std::hex << src;
+	tempBuffer = stream.str();
+
+	return tempBuffer;
+}
+
+// taken from TI SensorTag CC2650 wiki
+float convertToRealData(unsigned short hexValue) {
+	unsigned short swapped;
+	float value;
+	// swap bytes to perform endian conversion
+	swapped = (hexValue << 8 | hexValue >> 8);
+	// right shift by 2 bits and convert to decimal
+	swapped = (swapped >> 2);
+	value = swapped * 0.03125;		// this is the magic multiplication factor
+									// http://processors.wiki.ti.com/index.php/CC2650_SensorTag_User's_Guide#IR_Temperature_Sensor
+	return value;
+}
 
 int main() {
 
@@ -107,13 +126,19 @@ int main() {
 	unsigned short GAP_TerminateLinkRequest[] = { 0x01, 0x0A, 0xFE, 0x03, 0x00, 0x00, 0x13 };										// Terminate connection
 
 	// GATT
-	unsigned short GATT_IRTempOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x22, 0x00, 0x01, 0x00 };		// enable notification
-	unsigned short GATT_IRTempRead_ON[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x24, 0x00, 0x01 };			// activate sensor
-	unsigned short GATT_IRTempRead_OFF[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x24, 0x00, 0x00 };		// deactivate sensor
 
-	unsigned short GATT_AccOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3A, 0x00, 0x01, 0x00 };		// enable notification
+	// IR sensor
+	unsigned short GATT_IRTempOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x22, 0x00, 0x01, 0x00 };		// enable notification (client charac. config: 01:00)
+	unsigned short GATT_IRTempRead_ON[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x24, 0x00, 0x01 };			// activate sensor (IR temp config: 01)
+	unsigned short GATT_IRTempRead_OFF[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x24, 0x00, 0x00 };		// deactivate sensor (IR temp config: 00)
 
-
+	// IMU
+	unsigned short GATT_MovementOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3A, 0x00, 0x01, 0x00 };		// enable notification for IMU
+	unsigned short GATT_MovementPeriod[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x3E, 0x00, 0x50 };		// movement sensor data readout frequency (input*10)ms
+																											// write last byte: here, it is 50*10 = 500ms
+	unsigned short GATT_MovementRead_ON[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3C, 0x00, 0x7F, 0x03 };	// 7F: all IMU values (Gyro, Acc, Mag);
+																											// 0: WOM disabled; 3: 8G Acc range; Resultant bytes: 7F 03
+	unsigned short GATT_MovementRead_OFF[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3C, 0x00, 0x00, 0x03 };
 
 	// Open and configure serial port
 start:
@@ -134,18 +159,24 @@ start:
 	int i = 0;
 	int j = 1;
 	int devAddrCounter = 0;
-	int zeroValueCounter = 0;
 	int terminate = 0;
 	int restart = 0;
-	// unsigned short is 2 bytes or 16 bits
-	unsigned long long dataReceived = 0;		// this stores the current reading from the SensorTag
-	unsigned long long data[32];	// this stores the current values from the active sensor
+
+	int posCounter = 0;
+
 	BOOL isReadOk = 0;
 	char userInput;
-	float value;
-	char buffer[36];
-	string buffers[45];
-	char allBuffer[] = {'\0'};
+
+	// unsigned short is 2 bytes or 16 bits
+	unsigned long long dataReceived;		// this stores the current reading from the SensorTag
+	unsigned short dataReceived3;
+	string buffer, allBuffer;
+	
+	string reversed0[10];
+	string reversed1[16];
+	string reversed2[10];
+	//string reversed[] = { "0", "1",  "2",  "3",  "4",  "5",  "6",  "7", "8", "9" };
+	//cout << "Reversed: " << reversed[9] << endl;
 
 	while (i < 42) {
 		port.WriteByte(GAP_initialize[i], 1);
@@ -153,55 +184,12 @@ start:
 	}
 
 	cout << "\n\nSuccessfully connected with the CC2540 USB dongle " << endl;
-	//while (dataReceived != 255) {
-	//	port.ReadByte(dataReceived, 4);
-	//	data[j] = dataReceived;
-	//	cout << "Datastream " << j << "= " << hex << data[j] << endl;
-	//	_itoa_s(data[j], buffer, 16);
-	//	strcat(allBuffer, buffer);
-	//	buffers[j] = buffer;
-	//	cout << "Datastream (string) " << j << "= " << buffers[j] << endl;
-	//	//j++;
-	//}
-	while (j<15) {
+	while (j < 8) {
 		port.ReadByte(dataReceived, 8);
-		if (dataReceived == 255){
-			cout << "datastream ended!" << endl;
-			break;
-		}else{
-			data[j] = dataReceived;
-			cout << "Datastream " << j << "= " << hex << data[j] << endl;
-			_itoa_s(data[j], buffer, 16);
-			strcat(allBuffer, buffer);
-			buffers[j] = buffer;
-			cout << "Datastream (string) " << j << "= " << buffers[j] << endl;
-		}
 		j++;
 	}
-	cout << "Entire Datastream: " << allBuffer << endl;
-	/*for (int b = 1; b < 15;b++) {
-		strcat(buffers[b],)
-	}*/
-	getchar();
 
-	//if (isReadOk != 1) {
-	//	ErrorExit(TEXT("isReadOk"));
-	//}
-	//else {
-	//	cout << "\n\nSuccessfully connected with the CC2540 USB dongle " << endl;
-	//	while (1) {
-	//		port.ReadByte(dataReceived, 2);
-	//		if (zeroValueCounter >= 5) {
-	//			break;
-	//		}
-	//		else if (dataReceived == 0) {
-	//			zeroValueCounter += 1;
-	//		}
-	//		//cout << "Datastream " << j << "= "  << dataReceived << endl;
-	//		//j++;
-	//	}
-	//}
-
+	//cout << "Entire Datastream: " << allBuffer << endl;
 
 	// Set connection intervals, slave latency and supervision timeout
 	i = 0;
@@ -221,9 +209,9 @@ start:
 		}
 	}
 	j = 1;
-	while (j < 10) {							// Dongle sends exactly 9 bytes at this point
-		port.ReadByte(dataReceived, 2);
-		//cout << "Datastream " << j << "= " << dataReceived << endl;
+	while (j < 3) {							// Dongle sends exactly 9 bytes at this point
+		port.ReadByte(dataReceived, 8);
+		//cout << "Datastream (setparam interval-latency) " << j << "= " << dataReceived << endl;
 		j++;
 	}
 
@@ -234,9 +222,9 @@ start:
 		i++;
 	}
 	j = 1;
-	while (j < 6) {							// Dongle sends another 5 bytes at this point
-		port.ReadByte(dataReceived, 2);
-		//cout << "Datastream " << j << "= " << dataReceived << endl;
+	while (j < 3) {							// Dongle sends another 5 bytes at this point
+		port.ReadByte(dataReceived, 8);
+		//cout << "Datastream (setparam timeout) " << j << "= " << dataReceived << endl;
 		j++;
 	}
 
@@ -249,24 +237,31 @@ start:
 		i++;
 	}
 
+	int m = 0;
+	BOOL readData = 0;
+	BOOL movementDataFound = 0;
 	j = 1;
+	std::stringstream stream;
+	string MAC = "a0e6f8aed204";										// MAC address for the sensortag
 	while (1) {
-		//unsigned short buff[17];
-		port.ReadByte(dataReceived, 2);
-		/*if buff[16] == 0x1B{
-			cout "sensortag found!" << endl;
-		}*/
-		cout << "Datastream " << j << "= " << dataReceived << endl;
-		if (j == 300 && devAddrCounter < 3) {
+		port.ReadByte(dataReceived, 8);
+		//cout << "Datastream " << j << "= " << dataReceived << endl;
+		if (j == 300 && devAddrCounter < 2) {
 			cout << "SensorTag discovery timed out. Restarting the session..." << endl;
 			cout << "_______________________________________________________" << endl;
 			restart = 1;
 			break;
 		}
-		if (dataReceived == 59128) {
+
+		stream << std::hex << dataReceived;
+		buffer = stream.str();
+		stream.str(std::string());										// clear stringstream buffer for next read
+		//cout << "Datastream (string) " << j << "= " << buffer << endl;
+
+		if (buffer.find(MAC) != std::string::npos) {					// if SensorTag MAC address is found
 			devAddrCounter += 1;
-			cout << "Device Address counter = " << devAddrCounter << endl;			
-			if (devAddrCounter == 3) {
+			cout << "\nDevice Address counter = " << devAddrCounter << "\n" << endl;			
+			if (devAddrCounter == 2) {
 
 				// Establish connection with SensorTag	
 				cout << "\nSensorTag found! Establishing connection..." << endl;
@@ -277,38 +272,56 @@ start:
 				}
 				j = 0;
 				cout << "Connection established..." << endl;
-				cout << "Do you want to activate the IR temparature sensor? (y/n) ";
+				cout << "Do you want to activate the Movement sensor? (y/n) ";
 				cin >> userInput;
 				if (userInput == 'y') {
+					// Movement sensor ON
+					cout << "\nActivating movement sensor..." << endl;
 					i = 0;
 					while (i < 10) {
-						port.WriteByte(GATT_IRTempOn[i], 1);
+						//port.WriteByte(GATT_IRTempOn[i], 1);
+						port.WriteByte(GATT_MovementOn[i], 1);
 						i++;
 					}
 					j = 1;
-					while (j < 41) {
-						port.ReadByte(dataReceived, 2);
-						//cout << "Datastream " << j << "= " << dataReceived << endl;
+					while (j < 9) {
+						port.ReadByte(dataReceived, 8);
+						cout << "Datastream (movement ON) " << j << "= " << hex << dataReceived << endl;
+						j++;
+					}
+					// set data transmission frequency
+					cout << "\nSetting data transmission frequency to 500 milliseconds" << endl;
+					i = 0;
+					while (i < 9) {
+						port.WriteByte(GATT_MovementPeriod[i], 1);
+						i++;
+					}
+					j = 1;
+					while (j < 5) {
+						port.ReadByte(dataReceived, 8);
+						cout << "Datastream (movement period) " << j << "= " << hex << dataReceived << endl;
 						j++;
 					}
 					userInput = 'a';
 					cout << "\nSensor activated..." << endl;
-					cout << "\nDo you want to read from the IR temparature sensor? (Enter y/n) (Press SPACE to terminate after readout is done.)" << endl;
+					cout << "\nDo you want to read from the Movement sensor? (Enter y/n) (Press SPACE to terminate after readout is done.)" << endl;
 					cin >> userInput;
 					if (userInput == 'y') {
 						j = 1;
 						i = 0;
-						while (i < 9) {
-							port.WriteByte(GATT_IRTempRead_ON[i], 1);
+						while (i < 10) {
+							//port.WriteByte(GATT_IRTempRead_ON[i], 1);
+							port.WriteByte(GATT_MovementRead_ON[i], 1);
 							i++;
 						}
 						i = 0;
 						while (1) {
-							// Check if Spacebar is pressed (the user watns to end the program)
+							// Check if Spacebar is pressed (the user wants to end the program)
 							if (GetAsyncKeyState(VK_SPACE)) {
 								terminate += 1;
-								while (i < 9) {
-									port.WriteByte(GATT_IRTempRead_OFF[i], 1);
+								while (i < 10) {
+									//port.WriteByte(GATT_IRTempRead_OFF[i], 1);
+									port.WriteByte(GATT_MovementRead_OFF[i], 1);
 									i++;
 								}
 								i = 0;
@@ -322,33 +335,196 @@ start:
 								break;
 							}
 							// Read sensor output
-							port.ReadByte(dataReceived, 2);
-							if (dataReceived == 8454) {
-								//swapped = (dataReceived << 8 | dataReceived >> 8);
-								cout << "min temp = " << hex << dataReceived << endl;
-								for (int a = 0; a < 3; a++) {									
-									//port.ReadByte(dataReceived, 2);
-									cout << "bytes read = " << port.ReadByte2(dataReceived, 2) << endl;
-									data[a] = dataReceived;
+							if (!readData) {
+								cout << "\nReading 1st 14 bytes...\n" << endl;
+								while (m < 14) {
+									port.ReadByte(dataReceived, 8);
+									cout << "Datastream (1st 14 bytes) " << m << "= " << hex << dataReceived << endl;
+									m++;
+								}
+								cout << "" << endl;
+								readData = 1;
+							}
+							
+							port.ReadByte(dataReceived, 8);
+							if (dataReceived == 21929590532) {
+								movementDataFound = 1;
+								for (int a = 0; a < 3; a++) {
+									port.ReadByte(dataReceived, 8);
 									if (a == 0) {
-										value = convertToRealData(data[a]);
-										cout << "Object temperature: "  << hex << data[a] << endl;
+										//cout << "\nDatastream (1) " << "= " << hex << dataReceived << endl;
+										buffer = convertBufferToString(dataReceived);
+
+										// Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
+
+										j = 0;
+										posCounter = 1;
+
+										for (i = 9; i >= 0; i--) {
+											if (i % 2 == 1) {
+												reversed0[posCounter] = buffer[i];
+											}
+											else {
+												reversed0[j] = buffer[i];
+												j += 2;
+												posCounter = j + 1;
+											}												
+										}																			
+									}
+
+									else if (a == 1) {
+										//cout << "\nDatastream (2) " << "= " << hex << dataReceived << endl;
+										buffer = convertBufferToString(dataReceived);
+
+										// Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
+
+										j = 0;
+										posCounter = 1;
+
+										for (i = 15; i >= 0; i--) {
+											if (i % 2 == 1) {
+												reversed1[posCounter] = buffer[i];
+											}
+											else {
+												reversed1[j] = buffer[i];
+												j += 2;
+												posCounter = j + 1;
+											}
+										}
+									}
+
+									else {
+										//cout << "\nDatastream (3) " << "= " << hex << dataReceived << "\n" << endl;
+										buffer = convertBufferToString(dataReceived);
+
+										// Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
+
+										j = 0;
+										posCounter = 1;
+
+										for (i = 15; i >= 6; i--) {
+											if (i % 2 == 1) {
+												reversed2[posCounter] = buffer[i];
+											}
+											else {
+												reversed2[j] = buffer[i];
+												j += 2;
+												posCounter = j + 1;
+											}
+										}										
+									}								
+								}
+								cout << "Reversed0: ";
+								for (i = 0; i < 10; i++) {
+									allBuffer.append(reversed0[i]);
+									cout << reversed0[i];
+								}
+								cout << "\n";
+								cout << "Reversed1: ";
+								for (i = 0; i < 16; i++) {
+									allBuffer.append(reversed1[i]);
+									cout << reversed1[i];
+								}
+								cout << "\n";
+								cout << "Reversed2: ";
+								for (i = 0; i < 10; i++) {
+									allBuffer.append(reversed2[i]);
+									cout << reversed2[i];
+								}
+								cout << "\n";
+
+								cout << "\nAfter Endianness conversion: " << endl;
+								cout << "Gyro + Acc + Mag: " << allBuffer << endl;
+
+								cout << "\nGyroscope readout: ";
+								for (i = 0; i < 12; i++) {
+									cout << allBuffer[i];
+								}
+
+								cout << "\nAccelerometer readout: ";
+								for (i = 12; i < 24; i++) {
+									cout << allBuffer[i];
+								}
+
+								cout << "\nMagnetometer readout: ";
+								for (i = 24; i < 36; i++) {
+									cout << allBuffer[i];
+								}
+								cout << "\n\n";
+
+								movementDataFound = 0;
+								allBuffer = "";
+								for (i = 0; i < 10; i++) {
+									reversed0[i].clear();
+								}
+								for (i = 0; i < 16; i++) {
+									reversed1[i].clear();
+								}
+								for (i = 0; i < 10; i++) {
+									reversed2[i].clear();
+								}
+								
+							}
+
+							/* THIS PORTION TESTS THE IR TEMPERATURE SENSOR */
+
+							//port.ReadByte(dataReceived, 8);
+							//cout << "Datastream (residual) " << "= "  << hex << dataReceived << endl;
+
+							//cout << "" << endl;
+							//port.ReadByte(dataReceived, 8);
+							//cout << "Datastream (unnecessary 1) " << "= " << hex << dataReceived << endl;
+
+							//port.ReadByte(dataReceived, 3);
+							//cout << "Datastream (unnecessary 2) " << "= " << hex << dataReceived << endl;
+
+							//port.ReadByte(dataReceived, 6);
+							//cout << "\nDatastream (Gyroscope) " << "= " << hex << dataReceived << endl;
+
+							//port.ReadByte(dataReceived, 6);
+							//cout << "\nDatastream (Accelerometer) " << "= " << hex << dataReceived << endl;
+
+							//port.ReadByte(dataReceived, 6);
+							//cout << "\nDatastream (Magnetometer) " << "= " << hex << dataReceived << endl;
+
+							//cout << "" << endl;
+							//port.ReadByte(dataReceived, 3);
+							//cout << "Datastream (residual) " << "= " << hex << dataReceived << endl;
+
+							//m = 0;
+							//while (m < 5) {
+							//	port.ReadByte(dataReceived, 8);
+							//	cout << "Datastream (latent phase) " << m << " = " << hex << dataReceived << endl;
+							//	m++;
+							//}
+
+							/*
+							if (dataReceived3 == 8454) {
+								//swapped = (dataReceived << 8 | dataReceived >> 8);
+								cout << "min temp = " << hex << dataReceived3 << endl;
+								for (int a = 0; a < 3; a++) {									
+									port.ReadByte3(dataReceived3, 2);
+									//cout << "bytes read = " << port.ReadByte2(dataReceived, 2) << endl;
+									//data[a] = dataReceived;
+									if (a == 0) {
+										value = convertToRealData(dataReceived3);
+										cout << "Object temperature: "  << hex << dataReceived3 << endl;
 										cout << "Object temperature: (real) " << value << endl;
 									}
 									else if (a == 1){
-										value = convertToRealData(data[a]);
-										cout << "Ambience temperature:  " << hex << data[a] << endl;
+										value = convertToRealData(dataReceived3);
+										cout << "Ambience temperature:  " << hex << dataReceived3 << endl;
 										cout << "Ambience temperature (real): " << value << endl;
 									}
 									else {										
-										cout << "max temp:  " << hex << data[a] << endl;
-										value = convertToRealData(data[a]);
+										cout << "max temp:  " << hex << dataReceived3 << endl;
+										value = convertToRealData(dataReceived3);
 										cout << "max temp (real):  " << value << endl;
 									}
 								}
 								cout << "" << endl;
 							}
-							//memset(data, 0, sizeof(data));		// reset array to store next set of values
+							*/
 							j++;
 						}
 					}
@@ -390,16 +566,4 @@ start:
 		port.ClosePort();
 		goto start;		// Kind of cornered myself into using a goto statement because the sensor doesn't always respond on the first try
 	}
-}
-
-float convertToRealData(unsigned short hexValue) {
-	unsigned short swapped;
-	float value;
-	// swap bytes to perform endian conversion
-	swapped = (hexValue << 8 | hexValue >> 8);
-	// right shift by 2 bits and convert to decimal
-	swapped = (swapped >> 2);
-	value = swapped * 0.03125;		// this is the magic multiplication factor
-									// http://processors.wiki.ti.com/index.php/CC2650_SensorTag_User's_Guide#IR_Temperature_Sensor
-	return value;
 }

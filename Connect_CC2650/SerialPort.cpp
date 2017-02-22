@@ -167,3 +167,17 @@ int CSerialPort::ReadByte2(unsigned long long &resp, DWORD bytesToRead) {
 	}
 	return -1;
 }
+
+BOOL CSerialPort::ReadByte3(unsigned short &resp, DWORD bytesToRead) {
+	unsigned short rx;
+	resp = 255;
+	DWORD dwBytesTransferred = 0;
+
+	if (ReadFile(hComm, &rx, bytesToRead, &dwBytesTransferred, 0)) {
+		if (dwBytesTransferred > 0) {
+			resp = rx;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
