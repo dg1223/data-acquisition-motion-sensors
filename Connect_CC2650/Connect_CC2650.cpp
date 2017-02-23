@@ -6,7 +6,7 @@ Copyright (c) 2016
 This program uses the SerialPort class to connect to the CC2650 SensorTag using
 the CC2540 Bluetooth dongle manufactured by Texas Instruments.
 
-The algorithm in 10 steps:
+The algorithm to read from the IMU in 10 steps:
 	1. Initialize GAP and GATT parameters.
 	2. Create a SerialPort object.
 	3. Configure port.
@@ -15,28 +15,26 @@ The algorithm in 10 steps:
 	5. Set connection intervals and slave latency for the dongle similarly.
 	6. Send a "Device Discovery Request" to search for SensorTag. Search is done
 	   by searching for the MAC address of the corresponding SensorTag.
-	7. Once found (you get the MAC address 3 times), establish connection. When
+	7. Once found (you need to detect the MAC address twice), establish connection. When
 	   connection is established successfully, SensorTag will stop advertising.
-	8. Enable notification for the sensor you want to use. Currently, the code
-	   below works for IR sensor only.
+	   NOTE: If it is still advertising, stop the program and restart it.
+	8. Enable notification for the IMU and set sampling rate (set to 10ms by default).
 	9. Activate the sensor. As soon as you activate it, you should be able to see
-	   the readings continuously if you put your read function in a while loop.
-   10. Deactivate the sensor to deactivate reading.
+	   the readings continuously if you put your read&print function in a while loop.
+   10. Deactivate the sensor to deactivate reading. Once properly deactivated, SensorTag
+       resumes advertising.
 
 GAP and GATT parameters were taken from TI's BTool software. Their online GATT
 table is outdated. Please ues BTool to connect to SensorTag using the CC2540 dongle
-to find the parameters.
+to find the parameters manually (HINT: use GATT_DiscAllCharacteristics).
 
-Future work:
-	1. Read 4 bytes at a time to correctly read from the IR sensor.
-	2. Use the same algorithm to read from the IMU sensor. Please keep in mind that
-	   the IMU sensor has more parameters for different settings.
-	3. Convert data from IMU sensor to quaternions.
-	4. Replace the hardcoded COM port number and MAC address with a search and select
+Future work:	
+	1. Convert data from IMU to quaternions.
+	2. Replace the hardcoded COM port number and MAC address with a search and select
 	   function. The goal is to ask the user which COM port their dongle is connected
 	   to and then find the SensorTag device(s), display their addresses and ask the 
 	   user to select the one s/he wants to use.
-	5. Write code to have the ability to connect to any sensor and read data.
+	3. Write code to have the ability to connect to any sensor and read data.
 
 	In short: Make an open source software similar to BLE Device Monitor without the GUI.
 */
@@ -97,6 +95,26 @@ string convertBufferToString(unsigned long long src) {
 	return tempBuffer;
 }
 
+
+// Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
+string *convertEndianness(string destination[], string source, int loopStart, int loopEnd) {
+	int j = 0;
+	int nextPosition = 1;
+
+	for (int i = loopStart; i >= loopEnd; i--) {
+		if (i % 2 == 1) {
+			destination[nextPosition] = source[i];
+		}
+		else {
+			destination[j] = source[i];
+			j += 2;
+			nextPosition = j + 1;
+		}
+	}
+	return destination;
+}
+
+
 // taken from TI SensorTag CC2650 wiki
 float convertToRealData(unsigned short hexValue) {
 	unsigned short swapped;
@@ -127,15 +145,17 @@ int main() {
 
 	// GATT
 
+	/*
 	// IR sensor
 	unsigned short GATT_IRTempOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x22, 0x00, 0x01, 0x00 };		// enable notification (client charac. config: 01:00)
 	unsigned short GATT_IRTempRead_ON[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x24, 0x00, 0x01 };			// activate sensor (IR temp config: 01)
 	unsigned short GATT_IRTempRead_OFF[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x24, 0x00, 0x00 };		// deactivate sensor (IR temp config: 00)
+	*/
 
 	// IMU
 	unsigned short GATT_MovementOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3A, 0x00, 0x01, 0x00 };		// enable notification for IMU
-	unsigned short GATT_MovementPeriod[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x3E, 0x00, 0x50 };		// movement sensor data readout frequency (input*10)ms
-																											// write last byte: here, it is 50*10 = 500ms
+	unsigned short GATT_MovementPeriod[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x3E, 0x00, 0x10 };		// movement sensor data readout frequency (input*10)ms
+																											// write last byte: here, it is 10*10 = 100ms (fastest)
 	unsigned short GATT_MovementRead_ON[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3C, 0x00, 0x7F, 0x03 };	// 7F: all IMU values (Gyro, Acc, Mag);
 																											// 0: WOM disabled; 3: 8G Acc range; Resultant bytes: 7F 03
 	unsigned short GATT_MovementRead_OFF[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3C, 0x00, 0x00, 0x03 };
@@ -169,14 +189,12 @@ start:
 
 	// unsigned short is 2 bytes or 16 bits
 	unsigned long long dataReceived;		// this stores the current reading from the SensorTag
-	unsigned short dataReceived3;
+	//unsigned short dataReceived3;
 	string buffer, allBuffer;
-	
-	string reversed0[10];
-	string reversed1[16];
-	string reversed2[10];
-	//string reversed[] = { "0", "1",  "2",  "3",  "4",  "5",  "6",  "7", "8", "9" };
-	//cout << "Reversed: " << reversed[9] << endl;
+
+	// storage for sensor readouts after endian conversion (little to big endian)
+	string *reversed0, *reversed1, *reversed2;
+	string r0[10], r1[16], r2[10];
 
 	while (i < 42) {
 		port.WriteByte(GAP_initialize[i], 1);
@@ -188,8 +206,6 @@ start:
 		port.ReadByte(dataReceived, 8);
 		j++;
 	}
-
-	//cout << "Entire Datastream: " << allBuffer << endl;
 
 	// Set connection intervals, slave latency and supervision timeout
 	i = 0;
@@ -286,11 +302,11 @@ start:
 					j = 1;
 					while (j < 9) {
 						port.ReadByte(dataReceived, 8);
-						cout << "Datastream (movement ON) " << j << "= " << hex << dataReceived << endl;
+						//cout << "Datastream (movement ON) " << j << "= " << hex << dataReceived << endl;
 						j++;
 					}
 					// set data transmission frequency
-					cout << "\nSetting data transmission frequency to 500 milliseconds" << endl;
+					cout << "\nSetting data transmission frequency to 100 milliseconds" << endl;
 					i = 0;
 					while (i < 9) {
 						port.WriteByte(GATT_MovementPeriod[i], 1);
@@ -299,7 +315,7 @@ start:
 					j = 1;
 					while (j < 5) {
 						port.ReadByte(dataReceived, 8);
-						cout << "Datastream (movement period) " << j << "= " << hex << dataReceived << endl;
+						//cout << "Datastream (movement period) " << j << "= " << hex << dataReceived << endl;
 						j++;
 					}
 					userInput = 'a';
@@ -336,10 +352,10 @@ start:
 							}
 							// Read sensor output
 							if (!readData) {
-								cout << "\nReading 1st 14 bytes...\n" << endl;
+								//cout << "\nReading 1st 14 bytes...\n" << endl;
 								while (m < 14) {
 									port.ReadByte(dataReceived, 8);
-									cout << "Datastream (1st 14 bytes) " << m << "= " << hex << dataReceived << endl;
+									//cout << "Datastream (1st 14 bytes) " << m << "= " << hex << dataReceived << endl;
 									m++;
 								}
 								cout << "" << endl;
@@ -351,90 +367,45 @@ start:
 								movementDataFound = 1;
 								for (int a = 0; a < 3; a++) {
 									port.ReadByte(dataReceived, 8);
+
 									if (a == 0) {
 										//cout << "\nDatastream (1) " << "= " << hex << dataReceived << endl;
 										buffer = convertBufferToString(dataReceived);
-
-										// Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
-
-										j = 0;
-										posCounter = 1;
-
-										for (i = 9; i >= 0; i--) {
-											if (i % 2 == 1) {
-												reversed0[posCounter] = buffer[i];
-											}
-											else {
-												reversed0[j] = buffer[i];
-												j += 2;
-												posCounter = j + 1;
-											}												
-										}																			
+										reversed0 = convertEndianness(r0, buffer, 9, 0);
 									}
-
 									else if (a == 1) {
 										//cout << "\nDatastream (2) " << "= " << hex << dataReceived << endl;
 										buffer = convertBufferToString(dataReceived);
-
-										// Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
-
-										j = 0;
-										posCounter = 1;
-
-										for (i = 15; i >= 0; i--) {
-											if (i % 2 == 1) {
-												reversed1[posCounter] = buffer[i];
-											}
-											else {
-												reversed1[j] = buffer[i];
-												j += 2;
-												posCounter = j + 1;
-											}
-										}
+										reversed1 = convertEndianness(r1, buffer, 15, 0);								
 									}
-
 									else {
 										//cout << "\nDatastream (3) " << "= " << hex << dataReceived << "\n" << endl;
 										buffer = convertBufferToString(dataReceived);
-
-										// Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
-
-										j = 0;
-										posCounter = 1;
-
-										for (i = 15; i >= 6; i--) {
-											if (i % 2 == 1) {
-												reversed2[posCounter] = buffer[i];
-											}
-											else {
-												reversed2[j] = buffer[i];
-												j += 2;
-												posCounter = j + 1;
-											}
-										}										
+										reversed2 = convertEndianness(r2, buffer, 15, 6);
 									}								
 								}
-								cout << "Reversed0: ";
+
+								//cout << "Reversed0: ";
 								for (i = 0; i < 10; i++) {
 									allBuffer.append(reversed0[i]);
-									cout << reversed0[i];
+									//cout << reversed0[i];
 								}
-								cout << "\n";
-								cout << "Reversed1: ";
+								//cout << "\n";
+								//cout << "Reversed1: ";
 								for (i = 0; i < 16; i++) {
 									allBuffer.append(reversed1[i]);
-									cout << reversed1[i];
+									//cout << reversed1[i];
 								}
-								cout << "\n";
-								cout << "Reversed2: ";
+								//cout << "\n";
+								//cout << "Reversed2: ";
 								for (i = 0; i < 10; i++) {
 									allBuffer.append(reversed2[i]);
-									cout << reversed2[i];
+									//cout << reversed2[i];
 								}
 								cout << "\n";
 
-								cout << "\nAfter Endianness conversion: " << endl;
-								cout << "Gyro + Acc + Mag: " << allBuffer << endl;
+								//cout << "\nAfter Endianness conversion: " << endl;
+								//cout << "Gyro + Acc + Mag: " << allBuffer << endl;
 
 								cout << "\nGyroscope readout: ";
 								for (i = 0; i < 12; i++) {
@@ -467,37 +438,6 @@ start:
 							}
 
 							/* THIS PORTION TESTS THE IR TEMPERATURE SENSOR */
-
-							//port.ReadByte(dataReceived, 8);
-							//cout << "Datastream (residual) " << "= "  << hex << dataReceived << endl;
-
-							//cout << "" << endl;
-							//port.ReadByte(dataReceived, 8);
-							//cout << "Datastream (unnecessary 1) " << "= " << hex << dataReceived << endl;
-
-							//port.ReadByte(dataReceived, 3);
-							//cout << "Datastream (unnecessary 2) " << "= " << hex << dataReceived << endl;
-
-							//port.ReadByte(dataReceived, 6);
-							//cout << "\nDatastream (Gyroscope) " << "= " << hex << dataReceived << endl;
-
-							//port.ReadByte(dataReceived, 6);
-							//cout << "\nDatastream (Accelerometer) " << "= " << hex << dataReceived << endl;
-
-							//port.ReadByte(dataReceived, 6);
-							//cout << "\nDatastream (Magnetometer) " << "= " << hex << dataReceived << endl;
-
-							//cout << "" << endl;
-							//port.ReadByte(dataReceived, 3);
-							//cout << "Datastream (residual) " << "= " << hex << dataReceived << endl;
-
-							//m = 0;
-							//while (m < 5) {
-							//	port.ReadByte(dataReceived, 8);
-							//	cout << "Datastream (latent phase) " << m << " = " << hex << dataReceived << endl;
-							//	m++;
-							//}
-
 							/*
 							if (dataReceived3 == 8454) {
 								//swapped = (dataReceived << 8 | dataReceived >> 8);
@@ -522,7 +462,6 @@ start:
 										cout << "max temp (real):  " << value << endl;
 									}
 								}
-								cout << "" << endl;
 							}
 							*/
 							j++;
@@ -532,8 +471,8 @@ start:
 						cout << "\nQuitting program..." << endl;
 						terminate += 1;
 						i = 0;
-						while (i < 9) {
-							port.WriteByte(GATT_IRTempRead_OFF[i], 1);
+						while (i < 10) {
+							port.WriteByte(GATT_MovementRead_OFF[i], 1);
 							i++;
 						}
 						i = 0;
