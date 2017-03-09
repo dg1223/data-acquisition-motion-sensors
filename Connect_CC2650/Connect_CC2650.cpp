@@ -89,7 +89,7 @@ void ErrorExit(LPTSTR lpszFunction)
 string convertBufferToString(unsigned long long src) {
 	string tempBuffer;
 	std::stringstream stream;
-	stream << std::hex << src;
+	stream  << src;	// << std::hex
 	tempBuffer = stream.str();
 
 	return tempBuffer;
