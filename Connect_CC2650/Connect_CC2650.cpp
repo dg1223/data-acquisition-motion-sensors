@@ -44,7 +44,6 @@ Future work:
 #include "afxcoll.h"
 #include "SerialPort.h"
 #include <iostream>
-//#include "string.h"
 #include <string>
 #include <strsafe.h>
 #include <windows.h>
@@ -89,7 +88,7 @@ void ErrorExit(LPTSTR lpszFunction)
 string convertBufferToString(unsigned long long src) {
 	string tempBuffer;
 	std::stringstream stream;
-	stream  << src;	// << std::hex
+	stream << std::hex << src;	// << std::hex
 	tempBuffer = stream.str();
 
 	return tempBuffer;
@@ -102,15 +101,47 @@ string *convertEndianness(string destination[], string source, int loopStart, in
 	int nextPosition = 1;
 
 	for (int i = loopStart; i >= loopEnd; i--) {
-		if (i % 2 == 1) {
+		if (i % 2 == 1) {		// odd
 			destination[nextPosition] = source[i];
 		}
-		else {
+		else {					// even
 			destination[j] = source[i];
 			j += 2;
 			nextPosition = j + 1;
 		}
 	}
+	return destination;
+}
+
+/* Organize the buffer to store values in the following order:
+   Gx(MSB) Gx(LSB) Gy(MSB)...Ax(MSB) Ax(LSB)...Mz(MSB),Mz(LSB) */
+string *organizeBuffer(string destination[], string source, int loopStart, int loopEnd) {
+	
+	int j = 0;
+	int k;
+	for (int i = loopStart; i < loopEnd; i++) {
+		/* Algorithm to map the following
+		destination[0] = source[2];
+		destination[1] = source[3];
+		destination[2] = source[0];
+		destination[3] = source[1];
+		destination[4] = source[6];
+		destination[5] = source[7];
+		destination[6] = source[4];
+		destination[7] = source[5];
+		destination[8] = source[10];
+		destination[9] = source[11];
+		destination[10] = source[8];
+		destination[11] = source[9];
+		*/
+		k = i - loopStart;
+		if (k == 0 || k == 1 || k == 4 || k == 5 || k == 8 || k == 9)
+			j = k + 2;
+		else
+			j = k - 2;
+		destination[k] = source[j];
+	}
+	
 	return destination;
 }
 
@@ -153,7 +184,7 @@ int main() {
 	*/
 
 	// IMU
-	unsigned short GATT_MovementOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3A, 0x00, 0x01, 0x00 };		// enable notification for IMU
+	unsigned short GATT_MovementOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3A, 0x00, 0x01, 0x00 };		// enable notification for IMU (client charac. config: 01:00)
 	unsigned short GATT_MovementPeriod[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x3E, 0x00, 0x10 };		// movement sensor data readout frequency (input*10)ms
 																											// write last byte: here, it is 10*10 = 100ms (fastest)
 	unsigned short GATT_MovementRead_ON[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3C, 0x00, 0x7F, 0x03 };	// 7F: all IMU values (Gyro, Acc, Mag);
@@ -195,6 +226,10 @@ start:
 	// storage for sensor readouts after endian conversion (little to big endian)
 	string *reversed0, *reversed1, *reversed2;
 	string r0[10], r1[16], r2[10];
+
+	// storage for the rearranged readouts (after converting endianness) which will lead to actual calculations
+	string Gyro_pre[12], Acc_pre[12], Mag_pre[12];
+	string Gyro[12], Acc[12], Mag[12];
 
 	while (i < 42) {
 		port.WriteByte(GAP_initialize[i], 1);
@@ -363,7 +398,8 @@ start:
 							}
 							
 							port.ReadByte(dataReceived, 8);
-							if (dataReceived == 21929590532) {
+							if (dataReceived == 21929590532) {		// this is probably the raw 00 39 14... output in hex format
+																	// after which the buffer contains data readouts from the sensors
 								movementDataFound = 1;
 								for (int a = 0; a < 3; a++) {
 									port.ReadByte(dataReceived, 8);
@@ -371,16 +407,19 @@ start:
 									if (a == 0) {
 										//cout << "\nDatastream (1) " << "= " << hex << dataReceived << endl;
 										buffer = convertBufferToString(dataReceived);
+										cout << "raw string buffer1: " << buffer << endl;
 										reversed0 = convertEndianness(r0, buffer, 9, 0);
 									}
 									else if (a == 1) {
 										//cout << "\nDatastream (2) " << "= " << hex << dataReceived << endl;
 										buffer = convertBufferToString(dataReceived);
+										cout << "raw string buffer2: " << buffer << endl;
 										reversed1 = convertEndianness(r1, buffer, 15, 0);								
 									}
 									else {
 										//cout << "\nDatastream (3) " << "= " << hex << dataReceived << "\n" << endl;
 										buffer = convertBufferToString(dataReceived);
+										cout << "raw string buffer3: " << buffer << endl;
 										reversed2 = convertEndianness(r2, buffer, 15, 6);
 									}								
 								}
@@ -409,16 +448,21 @@ start:
 
 								cout << "\nGyroscope readout: ";
 								for (i = 0; i < 12; i++) {
+									Gyro_pre[i] = allBuffer[i];
 									cout << allBuffer[i];
 								}
 
 								cout << "\nAccelerometer readout: ";
 								for (i = 12; i < 24; i++) {
+									j = i - 12;
+									Acc_pre[j] = allBuffer[i];
 									cout << allBuffer[i];
 								}
 
 								cout << "\nMagnetometer readout: ";
 								for (i = 24; i < 36; i++) {
+									j = i - 24;
+									Mag_pre[j] = allBuffer[i];
 									cout << allBuffer[i];
 								}
 								cout << "\n\n";
