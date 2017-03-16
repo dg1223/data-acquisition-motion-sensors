@@ -94,7 +94,20 @@ string convertBufferToString(unsigned long long src) {
 	return tempBuffer;
 }
 
+// taken from TI SensorTag CC2650 wiki
+float convertToRealData(unsigned short hexValue) {
+	unsigned short swapped;
+	float value;
+	// swap bytes to perform endian conversion
+	swapped = (hexValue << 8 | hexValue >> 8);
+	// right shift by 2 bits and convert to decimal
+	swapped = (swapped >> 2);
+	value = swapped * 0.03125;		// this is the magic multiplication factor
+									// http://processors.wiki.ti.com/index.php/CC2650_SensorTag_User's_Guide#IR_Temperature_Sensor
+	return value;
+}
 
+/* The two functions below can be merged into a single function (one algorithm) to optimize memory use */
 // Little to Big Endian Conversion in pairs (1 byte = 1 pair = 2 chars)
 string *convertEndianness(string destination[], string source, int loopStart, int loopEnd) {
 	int j = 0;
@@ -115,7 +128,7 @@ string *convertEndianness(string destination[], string source, int loopStart, in
 
 /* Organize the buffer to store values in the following order:
    Gx(MSB) Gx(LSB) Gy(MSB)...Ax(MSB) Ax(LSB)...Mz(MSB),Mz(LSB) */
-string *organizeBuffer(string destination[], string source, int loopStart, int loopEnd) {
+string *organizeBuffer(string destination[], string source[], int loopStart, int loopEnd) {
 	
 	int j = 0;
 	int k;
@@ -142,22 +155,9 @@ string *organizeBuffer(string destination[], string source, int loopStart, int l
 		destination[k] = source[j];
 	}
 	
-	return destination;
+	return 0;
 }
 
-
-// taken from TI SensorTag CC2650 wiki
-float convertToRealData(unsigned short hexValue) {
-	unsigned short swapped;
-	float value;
-	// swap bytes to perform endian conversion
-	swapped = (hexValue << 8 | hexValue >> 8);
-	// right shift by 2 bits and convert to decimal
-	swapped = (swapped >> 2);
-	value = swapped * 0.03125;		// this is the magic multiplication factor
-									// http://processors.wiki.ti.com/index.php/CC2650_SensorTag_User's_Guide#IR_Temperature_Sensor
-	return value;
-}
 
 int main() {
 
@@ -398,28 +398,28 @@ start:
 							}
 							
 							port.ReadByte(dataReceived, 8);
-							if (dataReceived == 21929590532) {		// this is probably the raw 00 39 14... output in hex format
-																	// after which the buffer contains data readouts from the sensors
-								movementDataFound = 1;
+							if (dataReceived == 21929590532) {		/* this is probably the raw 00 39 14... output in hex format
+																	   after which the buffer contains data readouts from the sensors */
+								movementDataFound = 1;				// not sure why I am using this flag (will get back to it later)
 								for (int a = 0; a < 3; a++) {
 									port.ReadByte(dataReceived, 8);
 
 									if (a == 0) {
 										//cout << "\nDatastream (1) " << "= " << hex << dataReceived << endl;
 										buffer = convertBufferToString(dataReceived);
-										cout << "raw string buffer1: " << buffer << endl;
+										//cout << "raw string buffer1: " << buffer << endl;
 										reversed0 = convertEndianness(r0, buffer, 9, 0);
 									}
 									else if (a == 1) {
 										//cout << "\nDatastream (2) " << "= " << hex << dataReceived << endl;
 										buffer = convertBufferToString(dataReceived);
-										cout << "raw string buffer2: " << buffer << endl;
+										//cout << "raw string buffer2: " << buffer << endl;
 										reversed1 = convertEndianness(r1, buffer, 15, 0);								
 									}
 									else {
 										//cout << "\nDatastream (3) " << "= " << hex << dataReceived << "\n" << endl;
 										buffer = convertBufferToString(dataReceived);
-										cout << "raw string buffer3: " << buffer << endl;
+										//cout << "raw string buffer3: " << buffer << endl;
 										reversed2 = convertEndianness(r2, buffer, 15, 6);
 									}								
 								}
@@ -446,27 +446,42 @@ start:
 								//cout << "\nAfter Endianness conversion: " << endl;
 								//cout << "Gyro + Acc + Mag: " << allBuffer << endl;
 
-								cout << "\nGyroscope readout: ";
+								cout << "\nGyroscope readout (RAW): ";
 								for (i = 0; i < 12; i++) {
-									Gyro_pre[i] = allBuffer[i];
+									Gyro_pre[i] = allBuffer[i];									
 									cout << allBuffer[i];
 								}
+								organizeBuffer(Gyro, Gyro_pre, 0, 12);
+								cout << "\nGyroscope readout (for calc): ";
+								for (i = 0; i < 12; i++) {
+									cout << Gyro[i];
+								}
 
-								cout << "\nAccelerometer readout: ";
+								cout << "\n\nAccelerometer readout (RAW): ";
 								for (i = 12; i < 24; i++) {
 									j = i - 12;
 									Acc_pre[j] = allBuffer[i];
-									cout << allBuffer[i];
+									cout << allBuffer[i];									
+								}
+								organizeBuffer(Acc, Acc_pre, 12, 24);
+								cout << "\nAccelerometer readout (for calc): ";
+								for (i = 0; i < 12; i++) {
+									cout << Acc[i];
 								}
 
-								cout << "\nMagnetometer readout: ";
+								cout << "\n\nMagnetometer readout (RAW): ";
 								for (i = 24; i < 36; i++) {
 									j = i - 24;
-									Mag_pre[j] = allBuffer[i];
+									Mag_pre[j] = allBuffer[i];									
 									cout << allBuffer[i];
 								}
-								cout << "\n\n";
+								organizeBuffer(Mag, Mag_pre, 24, 36);
+								cout << "\nMagnetometer readout (for calc): ";
+								for (i = 0; i < 12; i++) {
+									cout << Mag[i];
+								}
 
+								cout << "\n\n";
 								movementDataFound = 0;
 								allBuffer = "";
 								for (i = 0; i < 10; i++) {
