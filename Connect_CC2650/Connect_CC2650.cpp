@@ -94,7 +94,7 @@ string convertBufferToString(unsigned long long src) {
 	return tempBuffer;
 }
 
-// taken from TI SensorTag CC2650 wiki
+// Temperature (taken from TI SensorTag CC2650 wiki)
 float convertToRealData(unsigned short hexValue) {
 	unsigned short swapped;
 	float value;
@@ -158,6 +158,29 @@ string *organizeBuffer(string destination[], string source[], int loopStart, int
 	return 0;
 }
 
+// 2's complement conversion of signed 16-bit int that has been presented as an unsigned 32-bit int
+int twosComplement(int decimal) {
+	if (decimal > 32767)
+		return (decimal - 65536);
+	else
+		return decimal;
+}
+
+// Gyroscope value
+double sensorMpu9250GyroConvert(int rawData)
+{
+	//-- calculate rotation, unit deg/s, range -250, +250
+	return (rawData / 131.072);
+}
+
+// Accelerometer value
+double sensorMpu9250AccConvert(int rawData)
+{	
+	//-- calculate acceleration, unit G, range -16, +16
+	return (rawData / 2048.00);
+}
+
+// Magnetometer data does not need conversion. It is done in the SensorTag firmware
 
 int main() {
 
@@ -185,10 +208,10 @@ int main() {
 
 	// IMU
 	unsigned short GATT_MovementOn[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3A, 0x00, 0x01, 0x00 };		// enable notification for IMU (client charac. config: 01:00)
-	unsigned short GATT_MovementPeriod[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x3E, 0x00, 0x10 };		// movement sensor data readout frequency (input*10)ms
+	unsigned short GATT_MovementPeriod[] = { 0x01, 0x92, 0xFD, 0x05, 0x00, 0x00, 0x3E, 0x00, 0x0A };		// movement sensor data readout frequency (input*10)ms
 																											// write last byte: here, it is 10*10 = 100ms (fastest)
 	unsigned short GATT_MovementRead_ON[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3C, 0x00, 0x7F, 0x03 };	// 7F: all IMU values (Gyro, Acc, Mag);
-																											// 0: WOM disabled; 3: 8G Acc range; Resultant bytes: 7F 03
+																											// 0: WOM disabled; 3: 16G Acc range; Resultant bytes: 7F 03
 	unsigned short GATT_MovementRead_OFF[] = { 0x01, 0x92, 0xFD, 0x06, 0x00, 0x00, 0x3C, 0x00, 0x00, 0x03 };
 
 	// Open and configure serial port
@@ -230,6 +253,10 @@ start:
 	// storage for the rearranged readouts (after converting endianness) which will lead to actual calculations
 	string Gyro_pre[12], Acc_pre[12], Mag_pre[12];
 	string Gyro[12], Acc[12], Mag[12];
+	string GyroX, GyroY, GyroZ, AccX, AccY, AccZ, MagX, MagY, MagZ;
+
+	// storage for actual values
+	double Gx, Gy, Gz, Ax, Ay, Az;
 
 	while (i < 42) {
 		port.WriteByte(GAP_initialize[i], 1);
@@ -446,44 +473,84 @@ start:
 								//cout << "\nAfter Endianness conversion: " << endl;
 								//cout << "Gyro + Acc + Mag: " << allBuffer << endl;
 
-								cout << "\nGyroscope readout (RAW): ";
+								//cout << "\nGyroscope readout (RAW): ";
 								for (i = 0; i < 12; i++) {
 									Gyro_pre[i] = allBuffer[i];									
-									cout << allBuffer[i];
+									//cout << allBuffer[i];
 								}
 								organizeBuffer(Gyro, Gyro_pre, 0, 12);
-								cout << "\nGyroscope readout (for calc): ";
+								cout << "\nGyroscope readout: ";
 								for (i = 0; i < 12; i++) {
 									cout << Gyro[i];
+									if (i < 4)
+										GyroX.append(Gyro[i]);
+									else if (i >= 4 && i < 8)
+										GyroY.append(Gyro[i]);
+									else
+										GyroZ.append(Gyro[i]);
 								}
+								// convert to decimal
+								Gx = sensorMpu9250GyroConvert(twosComplement(std::stoi(GyroX, 0, 16)));
+								Gy = sensorMpu9250GyroConvert(twosComplement(std::stoi(GyroY, 0, 16)));
+								Gz = sensorMpu9250GyroConvert(twosComplement(std::stoi(GyroZ, 0, 16)));
+								cout << "\nGx = " << Gx;
+								cout << "\nGy = " << Gy;
+								cout << "\nGz = " << Gz;
 
-								cout << "\n\nAccelerometer readout (RAW): ";
+								//cout << "\n\nAccelerometer readout (RAW): ";
 								for (i = 12; i < 24; i++) {
 									j = i - 12;
 									Acc_pre[j] = allBuffer[i];
-									cout << allBuffer[i];									
+									//cout << allBuffer[i];									
 								}
 								organizeBuffer(Acc, Acc_pre, 12, 24);
-								cout << "\nAccelerometer readout (for calc): ";
+								cout << "\nAccelerometer readout: ";
 								for (i = 0; i < 12; i++) {
 									cout << Acc[i];
+									if (i < 4)
+										AccX.append(Acc[i]);
+									else if (i >= 4 && i < 8)
+										AccY.append(Acc[i]);
+									else
+										AccZ.append(Acc[i]);
 								}
+								// convert to decimal
+								Ax = sensorMpu9250AccConvert(twosComplement(std::stoi(AccX, 0, 16)));
+								Ay = sensorMpu9250AccConvert(twosComplement(std::stoi(AccY, 0, 16)));
+								Az = sensorMpu9250AccConvert(twosComplement(std::stoi(AccZ, 0, 16)));
+								cout << "\nAx = " << Ax;
+								cout << "\nAy = " << Ay;
+								cout << "\nAz = " << Az;
 
-								cout << "\n\nMagnetometer readout (RAW): ";
+								//cout << "\n\nMagnetometer readout (RAW): ";
 								for (i = 24; i < 36; i++) {
 									j = i - 24;
 									Mag_pre[j] = allBuffer[i];									
-									cout << allBuffer[i];
+									//cout << allBuffer[i];
 								}
 								organizeBuffer(Mag, Mag_pre, 24, 36);
-								cout << "\nMagnetometer readout (for calc): ";
+								cout << "\nMagnetometer readout: ";
 								for (i = 0; i < 12; i++) {
 									cout << Mag[i];
+									if (i < 4)
+										MagX.append(Mag[i]);
+									else if (i >= 4 && i < 8)
+										MagY.append(Mag[i]);
+									else
+										MagZ.append(Mag[i]);
 								}
+								// convert to decimal
+
+								cout << "\nMx = " << twosComplement(std::stoi(MagX, 0, 16));
+								cout << "\nMy = " << twosComplement(std::stoi(MagY, 0, 16));
+								cout << "\nMz = " << twosComplement(std::stoi(MagZ, 0, 16));
 
 								cout << "\n\n";
 								movementDataFound = 0;
 								allBuffer = "";
+								GyroX = "", GyroY = "", GyroZ = "";
+								AccX  = "", AccY  = "", AccZ  = "";
+								MagX  = "", MagY  = "", MagZ  = "";
 								for (i = 0; i < 10; i++) {
 									reversed0[i].clear();
 								}
