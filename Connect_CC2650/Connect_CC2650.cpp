@@ -1,4 +1,4 @@
-/* Written by Shamir Alavi (shamiralavi@cmail.carleton.ca)
+/* Written by Shamir Alavi
 Copyright (c) 2016
 */
 
