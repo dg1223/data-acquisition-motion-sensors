@@ -21,8 +21,8 @@ The algorithm to read from the IMU in 10 steps:
 	8. Enable notification for the IMU and set sampling rate (set to 10ms by default).
 	9. Activate the sensor. As soon as you activate it, you should be able to see
 	   the readings continuously if you put your read&print function in a while loop.
-   10. Deactivate the sensor to deactivate reading. Once properly deactivated, SensorTag
-       resumes advertising.
+       10. Deactivate the sensor to deactivate reading. Once properly deactivated, SensorTag
+           resumes advertising.
 
 GAP and GATT parameters were taken from TI's BTool software. Their online GATT
 table is outdated. Please ues BTool to connect to SensorTag using the CC2540 dongle
